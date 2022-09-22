@@ -1,48 +1,44 @@
 # -*- coding: utf-8 -*-
-# Copyright (c) Facebook, Inc. and its affiliates.
+# Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 
-import numpy as np
+from fvcore.common.file_io import PathManager
 import os
+import numpy as np
 import xml.etree.ElementTree as ET
-from typing import List, Tuple, Union
 
-from detectron2.data import DatasetCatalog, MetadataCatalog
 from detectron2.structures import BoxMode
-from detectron2.utils.file_io import PathManager
+from detectron2.data import DatasetCatalog, MetadataCatalog
 
-__all__ = ["load_voc_instances", "register_pascal_voc"]
+
+__all__ = ["register_pascal_voc"]
 
 
 # fmt: off
-CLASS_NAMES = (
+CLASS_NAMES = [
     "aeroplane", "bicycle", "bird", "boat", "bottle", "bus", "car", "cat",
     "chair", "cow", "diningtable", "dog", "horse", "motorbike", "person",
-    "pottedplant", "sheep", "sofa", "train", "tvmonitor"
-)
+    "pottedplant", "sheep", "sofa", "train", "tvmonitor",
+]
 # fmt: on
 
 
-def load_voc_instances(dirname: str, split: str, class_names: Union[List[str], Tuple[str, ...]]):
+def load_voc_instances(dirname: str, split: str):
     """
     Load Pascal VOC detection annotations to Detectron2 format.
 
     Args:
         dirname: Contain "Annotations", "ImageSets", "JPEGImages"
         split (str): one of "train", "test", "val", "trainval"
-        class_names: list or tuple of class names
     """
     with PathManager.open(os.path.join(dirname, "ImageSets", "Main", split + ".txt")) as f:
         fileids = np.loadtxt(f, dtype=np.str)
 
-    # Needs to read many small annotation files. Makes sense at local
-    annotation_dirname = PathManager.get_local_path(os.path.join(dirname, "Annotations/"))
     dicts = []
     for fileid in fileids:
-        anno_file = os.path.join(annotation_dirname, fileid + ".xml")
+        anno_file = os.path.join(dirname, "Annotations", fileid + ".xml")
         jpeg_file = os.path.join(dirname, "JPEGImages", fileid + ".jpg")
 
-        with PathManager.open(anno_file) as f:
-            tree = ET.parse(f)
+        tree = ET.parse(anno_file)
 
         r = {
             "file_name": jpeg_file,
@@ -68,15 +64,15 @@ def load_voc_instances(dirname: str, split: str, class_names: Union[List[str], T
             bbox[0] -= 1.0
             bbox[1] -= 1.0
             instances.append(
-                {"category_id": class_names.index(cls), "bbox": bbox, "bbox_mode": BoxMode.XYXY_ABS}
+                {"category_id": CLASS_NAMES.index(cls), "bbox": bbox, "bbox_mode": BoxMode.XYXY_ABS}
             )
         r["annotations"] = instances
         dicts.append(r)
     return dicts
 
 
-def register_pascal_voc(name, dirname, split, year, class_names=CLASS_NAMES):
-    DatasetCatalog.register(name, lambda: load_voc_instances(dirname, split, class_names))
+def register_pascal_voc(name, dirname, split, year):
+    DatasetCatalog.register(name, lambda: load_voc_instances(dirname, split))
     MetadataCatalog.get(name).set(
-        thing_classes=list(class_names), dirname=dirname, year=year, split=split
+        thing_classes=CLASS_NAMES, dirname=dirname, year=year, split=split
     )

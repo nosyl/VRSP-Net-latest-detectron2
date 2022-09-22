@@ -1,9 +1,5 @@
-# Copyright (c) Facebook, Inc. and its affiliates.
-import torch
-
-from detectron2.utils.logger import _log_api_usage
+# Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 from detectron2.utils.registry import Registry
-
 META_ARCH_REGISTRY = Registry("META_ARCH")  # noqa F401 isort:skip
 META_ARCH_REGISTRY.__doc__ = """
 Registry for meta-architectures, i.e. the whole model.
@@ -19,7 +15,4 @@ def build_model(cfg):
     Note that it does not load any weights from ``cfg``.
     """
     meta_arch = cfg.MODEL.META_ARCHITECTURE
-    model = META_ARCH_REGISTRY.get(meta_arch)(cfg)
-    model.to(torch.device(cfg.MODEL.DEVICE))
-    _log_api_usage("modeling.meta_arch." + meta_arch)
-    return model
+    return META_ARCH_REGISTRY.get(meta_arch)(cfg)

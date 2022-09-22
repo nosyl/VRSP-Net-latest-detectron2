@@ -1,18 +1,12 @@
-# Copyright (c) Facebook, Inc. and its affiliates.
-import atexit
+# Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 import functools
 import logging
 import os
 import sys
-import time
 from collections import Counter
-import torch
+from fvcore.common.file_io import PathManager
 from tabulate import tabulate
 from termcolor import colored
-
-from detectron2.utils.file_io import PathManager
-
-__all__ = ["setup_logger", "log_first_n", "log_every_n", "log_every_n_seconds"]
 
 
 class _ColorfulFormatter(logging.Formatter):
@@ -40,8 +34,6 @@ def setup_logger(
     output=None, distributed_rank=0, *, color=True, name="detectron2", abbrev_name=None
 ):
     """
-    Initialize the detectron2 logger and set its verbosity level to "DEBUG".
-
     Args:
         output (str): a file name or a directory to save log. If None, will not save log file.
             If ends with ".txt" or ".log", assumed to be a file name.
@@ -51,9 +43,6 @@ def setup_logger(
             Set to "" to not log the root module in logs.
             By default, will abbreviate "detectron2" to "d2" and leave other
             modules unchanged.
-
-    Returns:
-        logging.Logger: a logger
     """
     logger = logging.getLogger(name)
     logger.setLevel(logging.DEBUG)
@@ -103,10 +92,7 @@ def setup_logger(
 # with the same file name can safely write to the same file.
 @functools.lru_cache(maxsize=None)
 def _cached_log_stream(filename):
-    # use 1K buffer if writing to cloud storage
-    io = PathManager.open(filename, "a", buffering=1024 if "://" in filename else -1)
-    atexit.register(io.close)
-    return io
+    return PathManager.open(filename, "a")
 
 
 """
@@ -134,7 +120,6 @@ def _find_caller():
 
 
 _LOG_COUNTER = Counter()
-_LOG_TIMER = {}
 
 
 def log_first_n(lvl, msg, n=1, *, name=None, key="caller"):
@@ -188,24 +173,6 @@ def log_every_n(lvl, msg, n=1, *, name=None):
         logging.getLogger(name or caller_module).log(lvl, msg)
 
 
-def log_every_n_seconds(lvl, msg, n=1, *, name=None):
-    """
-    Log no more than once per n seconds.
-
-    Args:
-        lvl (int): the logging level
-        msg (str):
-        n (int):
-        name (str): name of the logger to use. Will use the caller's module by default.
-    """
-    caller_module, key = _find_caller()
-    last_logged = _LOG_TIMER.get(key, None)
-    current_time = time.time()
-    if last_logged is None or current_time - last_logged >= n:
-        logging.getLogger(name or caller_module).log(lvl, msg)
-        _LOG_TIMER[key] = current_time
-
-
 def create_small_table(small_dict):
     """
     Create a small table using the keys of small_dict as headers. This is only
@@ -227,11 +194,3 @@ def create_small_table(small_dict):
         numalign="center",
     )
     return table
-
-
-def _log_api_usage(identifier: str):
-    """
-    Internal function used to log the usage of different detectron2 components
-    inside facebook's infra.
-    """
-    torch._C._log_api_usage_once("detectron2." + identifier)

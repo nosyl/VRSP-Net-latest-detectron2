@@ -1,8 +1,9 @@
-# Copyright (c) Facebook, Inc. and its affiliates.
+# Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 import math
-from typing import List, Tuple
+from typing import Iterator, List, Union
 import torch
 
+from detectron2.layers import cat
 from detectron2.layers.rotated_boxes import pairwise_iou_rotated
 
 from .boxes import Boxes
@@ -41,9 +42,9 @@ class RotatedBoxes(Boxes):
         Mathematically, since the right-handed coordinate system for image space
         is (y, x), where y is top->down and x is left->right, the 4 vertices of the
         rotated rectangle :math:`(yr_i, xr_i)` (i = 1, 2, 3, 4) can be obtained from
-        the vertices of the horizontal rectangle :math:`(y_i, x_i)` (i = 1, 2, 3, 4)
+        the vertices of the horizontal rectangle (y_i, x_i) (i = 1, 2, 3, 4)
         in the following way (:math:`\\theta = angle*\\pi/180` is the angle in radians,
-        :math:`(y_c, x_c)` is the center of the rectangle):
+        (y_c, x_c) is the center of the rectangle):
 
         .. math::
 
@@ -213,9 +214,7 @@ class RotatedBoxes(Boxes):
         device = tensor.device if isinstance(tensor, torch.Tensor) else torch.device("cpu")
         tensor = torch.as_tensor(tensor, dtype=torch.float32, device=device)
         if tensor.numel() == 0:
-            # Use reshape, so we don't end up creating a new tensor that does not depend on
-            # the inputs (and consequently confuses jit)
-            tensor = tensor.reshape((0, 5)).to(dtype=torch.float32, device=device)
+            tensor = torch.zeros(0, 5, dtype=torch.float32, device=device)
         assert tensor.dim() == 2 and tensor.size(-1) == 5, tensor.size()
 
         self.tensor = tensor
@@ -229,9 +228,8 @@ class RotatedBoxes(Boxes):
         """
         return RotatedBoxes(self.tensor.clone())
 
-    def to(self, device: torch.device):
-        # Boxes are assumed float32 and does not support to(dtype)
-        return RotatedBoxes(self.tensor.to(device=device))
+    def to(self, device: str) -> "RotatedBoxes":
+        return RotatedBoxes(self.tensor.to(device))
 
     def area(self) -> torch.Tensor:
         """
@@ -250,7 +248,7 @@ class RotatedBoxes(Boxes):
         """
         self.tensor[:, 4] = (self.tensor[:, 4] + 180.0) % 360.0 - 180.0
 
-    def clip(self, box_size: Tuple[int, int], clip_angle_threshold: float = 1.0) -> None:
+    def clip(self, box_size: Boxes.BoxSizeType, clip_angle_threshold: float = 1.0) -> None:
         """
         Clip (in place) the boxes by limiting x coordinates to the range [0, width]
         and y coordinates to the range [0, height].
@@ -300,7 +298,7 @@ class RotatedBoxes(Boxes):
         self.tensor[idx, 2] = torch.min(self.tensor[idx, 2], x2 - x1)
         self.tensor[idx, 3] = torch.min(self.tensor[idx, 3], y2 - y1)
 
-    def nonempty(self, threshold: float = 0.0) -> torch.Tensor:
+    def nonempty(self, threshold: int = 0) -> torch.Tensor:
         """
         Find boxes that are non-empty.
         A box is considered empty, if either of its side is no larger than threshold.
@@ -315,7 +313,7 @@ class RotatedBoxes(Boxes):
         keep = (widths > threshold) & (heights > threshold)
         return keep
 
-    def __getitem__(self, item) -> "RotatedBoxes":
+    def __getitem__(self, item: Union[int, slice, torch.BoolTensor]) -> "RotatedBoxes":
         """
         Returns:
             RotatedBoxes: Create a new :class:`RotatedBoxes` by indexing.
@@ -344,7 +342,7 @@ class RotatedBoxes(Boxes):
     def __repr__(self) -> str:
         return "RotatedBoxes(" + str(self.tensor) + ")"
 
-    def inside_box(self, box_size: Tuple[int, int], boundary_threshold: int = 0) -> torch.Tensor:
+    def inside_box(self, box_size: Boxes.BoxSizeType, boundary_threshold: int = 0) -> torch.Tensor:
         """
         Args:
             box_size (height, width): Size of the reference box covering
@@ -453,8 +451,8 @@ class RotatedBoxes(Boxes):
         # when sfx == sfy, angle(new) == atan2(s, c) == angle(old)
         self.tensor[:, 4] = torch.atan2(scale_x * s, scale_y * c) * 180 / math.pi
 
-    @classmethod
-    def cat(cls, boxes_list: List["RotatedBoxes"]) -> "RotatedBoxes":
+    @staticmethod
+    def cat(boxes_list: List["RotatedBoxes"]) -> "RotatedBoxes":  # type: ignore
         """
         Concatenates a list of RotatedBoxes into a single RotatedBoxes
 
@@ -465,20 +463,17 @@ class RotatedBoxes(Boxes):
             RotatedBoxes: the concatenated RotatedBoxes
         """
         assert isinstance(boxes_list, (list, tuple))
-        if len(boxes_list) == 0:
-            return cls(torch.empty(0))
-        assert all([isinstance(box, RotatedBoxes) for box in boxes_list])
+        assert len(boxes_list) > 0
+        assert all(isinstance(box, RotatedBoxes) for box in boxes_list)
 
-        # use torch.cat (v.s. layers.cat) so the returned boxes never share storage with input
-        cat_boxes = cls(torch.cat([b.tensor for b in boxes_list], dim=0))
+        cat_boxes = type(boxes_list[0])(cat([b.tensor for b in boxes_list], dim=0))
         return cat_boxes
 
     @property
-    def device(self) -> torch.device:
+    def device(self) -> str:
         return self.tensor.device
 
-    @torch.jit.unused
-    def __iter__(self):
+    def __iter__(self) -> Iterator[torch.Tensor]:
         """
         Yield a box as a Tensor of shape (5,) at a time.
         """
@@ -489,7 +484,7 @@ def pairwise_iou(boxes1: RotatedBoxes, boxes2: RotatedBoxes) -> None:
     """
     Given two lists of rotated boxes of size N and M,
     compute the IoU (intersection over union)
-    between **all** N x M pairs of boxes.
+    between __all__ N x M pairs of boxes.
     The box order must be (x_center, y_center, width, height, angle).
 
     Args:

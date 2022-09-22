@@ -1,4 +1,4 @@
-// Copyright (c) Facebook, Inc. and its affiliates.
+// Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 #pragma once
 #include <torch/types.h>
 
@@ -8,7 +8,7 @@ at::Tensor box_iou_rotated_cpu(
     const at::Tensor& boxes1,
     const at::Tensor& boxes2);
 
-#if defined(WITH_CUDA) || defined(WITH_HIP)
+#ifdef WITH_CUDA
 at::Tensor box_iou_rotated_cuda(
     const at::Tensor& boxes1,
     const at::Tensor& boxes2);
@@ -22,14 +22,14 @@ inline at::Tensor box_iou_rotated(
     const at::Tensor& boxes2) {
   assert(boxes1.device().is_cuda() == boxes2.device().is_cuda());
   if (boxes1.device().is_cuda()) {
-#if defined(WITH_CUDA) || defined(WITH_HIP)
-    return box_iou_rotated_cuda(boxes1.contiguous(), boxes2.contiguous());
+#ifdef WITH_CUDA
+    return box_iou_rotated_cuda(boxes1, boxes2);
 #else
-    AT_ERROR("Detectron2 is not compiled with GPU support!");
+    AT_ERROR("Not compiled with GPU support");
 #endif
   }
 
-  return box_iou_rotated_cpu(boxes1.contiguous(), boxes2.contiguous());
+  return box_iou_rotated_cpu(boxes1, boxes2);
 }
 
 } // namespace detectron2

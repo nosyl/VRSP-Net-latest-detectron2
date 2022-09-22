@@ -1,15 +1,23 @@
-# Copyright (c) Facebook, Inc. and its affiliates.
+# Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 import datetime
 import logging
 import time
-from collections import OrderedDict, abc
-from contextlib import ExitStack, contextmanager
-from typing import List, Union
+from collections import OrderedDict
+from contextlib import contextmanager
+from detectron2.utils.events import get_event_storage
+from detectron2.utils.visualizer import Visualizer
+from detectron2.modeling.postprocessing import detector_postprocess
+from detectron2.data import MetadataCatalog
+from detectron2.utils.visualizer import Visualizer
+from detectron2.modeling.postprocessing import detector_postprocess
+from detectron2.utils.events import EventStorage
 import torch
-from torch import nn
+from detectron2.structures import BitMasks
+import numpy as np
+from PIL import Image
 
-from detectron2.utils.comm import get_world_size, is_main_process
-from detectron2.utils.logger import log_every_n_seconds
+from detectron2.utils.comm import is_main_process
+
 
 
 class DatasetEvaluator:
@@ -30,20 +38,13 @@ class DatasetEvaluator:
         """
         pass
 
-    def process(self, inputs, outputs):
+    def process(self, input, output):
         """
-        Process the pair of inputs and outputs.
-        If they contain batches, the pairs can be consumed one-by-one using `zip`:
-
-        .. code-block:: python
-
-            for input_, output in zip(inputs, outputs):
-                # do evaluation on single input/output pair
-                ...
+        Process an input/output pair.
 
         Args:
-            inputs (list): the inputs that's used to call the model.
-            outputs (list): the return value of `model(inputs)`
+            input: the input that's used to call the model.
+            output: the return value of `model(output)`
         """
         pass
 
@@ -62,20 +63,13 @@ class DatasetEvaluator:
         """
         pass
 
+    def visualization(self, inputs, outputs):
+        pass
+
 
 class DatasetEvaluators(DatasetEvaluator):
-    """
-    Wrapper class to combine multiple :class:`DatasetEvaluator` instances.
-
-    This class dispatches every evaluation call to
-    all of its :class:`DatasetEvaluator`.
-    """
-
     def __init__(self, evaluators):
-        """
-        Args:
-            evaluators (list): the evaluators to combine.
-        """
+        assert len(evaluators)
         super().__init__()
         self._evaluators = evaluators
 
@@ -83,15 +77,15 @@ class DatasetEvaluators(DatasetEvaluator):
         for evaluator in self._evaluators:
             evaluator.reset()
 
-    def process(self, inputs, outputs):
+    def process(self, input, output):
         for evaluator in self._evaluators:
-            evaluator.process(inputs, outputs)
+            evaluator.process(input, output)
 
     def evaluate(self):
         results = OrderedDict()
         for evaluator in self._evaluators:
             result = evaluator.evaluate()
-            if is_main_process() and result is not None:
+            if is_main_process():
                 for k, v in result.items():
                     assert (
                         k not in results
@@ -100,113 +94,205 @@ class DatasetEvaluators(DatasetEvaluator):
         return results
 
 
-def inference_on_dataset(
-    model, data_loader, evaluator: Union[DatasetEvaluator, List[DatasetEvaluator], None]
-):
+def inference_on_dataset(model, data_loader, evaluator):
     """
     Run model on the data_loader and evaluate the metrics with evaluator.
-    Also benchmark the inference speed of `model.__call__` accurately.
     The model will be used in eval mode.
 
     Args:
-        model (callable): a callable which takes an object from
-            `data_loader` and returns some outputs.
+        model (nn.Module): a module which accepts an object from
+            `data_loader` and returns some outputs. It will be temporarily set to `eval` mode.
 
-            If it's an nn.Module, it will be temporarily set to `eval` mode.
             If you wish to evaluate a model in `training` mode instead, you can
             wrap the given model and override its behavior of `.eval()` and `.train()`.
         data_loader: an iterable object with a length.
             The elements it generates will be the inputs to the model.
-        evaluator: the evaluator(s) to run. Use `None` if you only want to benchmark,
-            but don't want to do any evaluation.
+        evaluator (DatasetEvaluator): the evaluator to run. Use
+            :class:`DatasetEvaluators([])` if you only want to benchmark, but
+            don't want to do any evaluation.
 
     Returns:
         The return value of `evaluator.evaluate()`
     """
-    num_devices = get_world_size()
+    num_devices = torch.distributed.get_world_size() if torch.distributed.is_initialized() else 1
     logger = logging.getLogger(__name__)
-    logger.info("Start inference on {} batches".format(len(data_loader)))
+    logger.info("Start inference on {} images".format(len(data_loader)))
 
     total = len(data_loader)  # inference data loader must have a fixed length
-    if evaluator is None:
-        # create a no-op evaluator
-        evaluator = DatasetEvaluators([])
-    if isinstance(evaluator, abc.MutableSequence):
-        evaluator = DatasetEvaluators(evaluator)
     evaluator.reset()
 
-    num_warmup = min(5, total - 1)
-    start_time = time.perf_counter()
-    total_data_time = 0
+    logging_interval = 50
+    num_warmup = min(5, logging_interval - 1, total - 1)
+    start_time = time.time()
     total_compute_time = 0
-    total_eval_time = 0
-    with ExitStack() as stack:
-        if isinstance(model, nn.Module):
-            stack.enter_context(inference_context(model))
-        stack.enter_context(torch.no_grad())
+    with inference_context(model), torch.no_grad():
+        with EventStorage() as storage:
+            for idx, inputs in enumerate(data_loader):
+                if idx == num_warmup:
+                    start_time = time.time()
+                    total_compute_time = 0
 
-        start_data_time = time.perf_counter()
-        for idx, inputs in enumerate(data_loader):
-            total_data_time += time.perf_counter() - start_data_time
-            if idx == num_warmup:
-                start_time = time.perf_counter()
-                total_data_time = 0
-                total_compute_time = 0
-                total_eval_time = 0
+                start_compute_time = time.time()
+                outputs = model(inputs)
+                # outputs = model(inputs, do_postprocess=False)
+                # #
+                # co = np.array([np.array([0., 0., 1.], dtype=np.float32),
+                #                np.array([0., 1., 0.], dtype=np.float32),
+                #                np.array([1., 0., 0.], dtype=np.float32),
+                #                np.array([0., 1., 1.], dtype=np.float32),
+                #                np.array([1., 0., 1.], dtype=np.float32),
+                #                np.array([1., 1., 0.], dtype=np.float32),
+                #                np.array([0., 0., 0.5], dtype=np.float32),
+                #                np.array([0., 0.5, 0.], dtype=np.float32),
+                #                np.array([0.5, 0., 0.], dtype=np.float32)])
+                # #
+                # gt_img = vis_image(inputs[0], inputs[0], mode="gt", colors=co, ind_lst=[0])
+                # # vis.images(gt_img, win_name='gt')
+                # # im = Image.fromarray(gt_img.transpose(1, 2, 0))
+                # # im.save("/root/detectron2/figs/ours_{}_gt.jpg".format(idx))
+                #
+                # outputs_resize = detector_postprocess(outputs[0], inputs[0]['image'].size(1), inputs[0]['image'].size(2))
+                # import ipdb
+                # ipdb.set_trace()
+                # pred_img = vis_image(inputs[0], outputs_resize, mode="pred", colors=co, ind_lst=[0])
 
-            start_compute_time = time.perf_counter()
-            outputs = model(inputs)
-            if torch.cuda.is_available():
-                torch.cuda.synchronize()
-            total_compute_time += time.perf_counter() - start_compute_time
+                if torch.cuda.is_available():
+                    torch.cuda.synchronize()
+                total_compute_time += time.time() - start_compute_time
 
-            start_eval_time = time.perf_counter()
-            evaluator.process(inputs, outputs)
-            total_eval_time += time.perf_counter() - start_eval_time
-
-            iters_after_start = idx + 1 - num_warmup * int(idx >= num_warmup)
-            data_seconds_per_iter = total_data_time / iters_after_start
-            compute_seconds_per_iter = total_compute_time / iters_after_start
-            eval_seconds_per_iter = total_eval_time / iters_after_start
-            total_seconds_per_iter = (time.perf_counter() - start_time) / iters_after_start
-            if idx >= num_warmup * 2 or compute_seconds_per_iter > 5:
-                eta = datetime.timedelta(seconds=int(total_seconds_per_iter * (total - idx - 1)))
-                log_every_n_seconds(
-                    logging.INFO,
-                    (
-                        f"Inference done {idx + 1}/{total}. "
-                        f"Dataloading: {data_seconds_per_iter:.4f} s/iter. "
-                        f"Inference: {compute_seconds_per_iter:.4f} s/iter. "
-                        f"Eval: {eval_seconds_per_iter:.4f} s/iter. "
-                        f"Total: {total_seconds_per_iter:.4f} s/iter. "
-                        f"ETA={eta}"
-                    ),
-                    n=5,
-                )
-            start_data_time = time.perf_counter()
-
+                evaluator.process(inputs, outputs)
+                if (idx + 1) % logging_interval == 0:
+                    duration = time.time() - start_time
+                    seconds_per_img = duration / (idx + 1 - num_warmup)
+                    eta = datetime.timedelta(
+                        seconds=int(seconds_per_img * (total - num_warmup) - duration)
+                    )
+                    logger.info(
+                        "Inference done {}/{}. {:.4f} s / img. ETA={}".format(
+                            idx + 1, total, seconds_per_img, str(eta)
+                        )
+                    )
+                # if idx > 10:
+                #     break
     # Measure the time only for this worker (before the synchronization barrier)
-    total_time = time.perf_counter() - start_time
+    total_time = int(time.time() - start_time)
     total_time_str = str(datetime.timedelta(seconds=total_time))
     # NOTE this format is parsed by grep
     logger.info(
-        "Total inference time: {} ({:.6f} s / iter per device, on {} devices)".format(
+        "Total inference time: {} ({:.6f} s / img per device, on {} devices)".format(
             total_time_str, total_time / (total - num_warmup), num_devices
         )
     )
     total_compute_time_str = str(datetime.timedelta(seconds=int(total_compute_time)))
     logger.info(
-        "Total inference pure compute time: {} ({:.6f} s / iter per device, on {} devices)".format(
+        "Total inference pure compute time: {} ({:.6f} s / img per device, on {} devices)".format(
             total_compute_time_str, total_compute_time / (total - num_warmup), num_devices
         )
     )
-
     results = evaluator.evaluate()
     # An evaluator may return None when not in main process.
     # Replace it by an empty dict instead to make it easier for downstream code to handle
     if results is None:
         results = {}
     return results
+
+
+def vis_image(inputs, instance, mode="gt", colors=None, ind_lst=None):
+    v_output = Visualizer(inputs['image'].numpy()[::-1, :, :].transpose(1, 2, 0), None)
+    if mode == "gt":
+        v_output = v_output.overlay_instances(masks=instance["inference_instances"].gt_masks.tensor[ind_lst], assigned_colors=colors)
+    else:
+        v_output = v_output.overlay_instances(masks=instance.pred_amodal2_masks[ind_lst].cpu(), assigned_colors=colors)
+        # v_output = v_output.overlay_instances(boxes=instance.pred_boxes[ind_lst].tensor.cpu(), assigned_colors=colors)
+
+    img = v_output.get_image()
+    img = img.transpose(2, 0, 1)
+    vis.images(img, win_name='{}'.format(mode))
+
+    return img
+
+
+def save_images(gt_img, pred_img, no=0, model_name=None):
+    im = Image.fromarray(gt_img.transpose(1, 2, 0))
+    im.save("/root/detectron2/figs/supp/gt{}.jpg".format(str(no).zfill(3)))
+
+    im = Image.fromarray(pred_img.transpose(1, 2, 0))
+    im.save("/root/detectron2/figs/supp/{}{}.jpg".format(model_name, str(no).zfill(3)))
+
+
+def embedding_inference_on_train_dataset(model, train_dataloader):
+    """
+    Run model on the data_loader and evaluate the metrics with evaluator.
+    The model will be used in eval mode.
+
+    Args:
+        model (nn.Module): a module which accepts an object from
+            `data_loader` and returns some outputs. It will be temporarily set to `eval` mode.
+
+            If you wish to evaluate a model in `training` mode instead, you can
+            wrap the given model and override its behavior of `.eval()` and `.train()`.
+        train_dataloader: an iterable object with a length.
+            The elements it generates will be the inputs to the model.
+
+    Returns:
+        The return value of `evaluator.evaluate()`
+    """
+    model.roi_heads.inference_embedding = True
+    num_devices = torch.distributed.get_world_size() if torch.distributed.is_initialized() else 1
+    logger = logging.getLogger(__name__)
+    logger.info("Start embedding inference on training {} images".format(len(train_dataloader)))
+
+    total = len(train_dataloader)  # inference data loader must have a fixed length
+
+    logging_interval = 50
+    num_warmup = min(5, logging_interval - 1, total - 1)
+    start_time = time.time()
+    total_compute_time = 0
+    with inference_context(model), torch.no_grad():
+        with EventStorage() as storage:
+            for idx, inputs in enumerate(train_dataloader):
+                if idx == num_warmup:
+                    start_time = time.time()
+                    total_compute_time = 0
+
+                start_compute_time = time.time()
+                model(inputs)
+                if torch.cuda.is_available():
+                    torch.cuda.synchronize()
+                total_compute_time += time.time() - start_compute_time
+                if (idx + 1) % logging_interval == 0:
+                    duration = time.time() - start_time
+                    seconds_per_img = duration / (idx + 1 - num_warmup)
+                    eta = datetime.timedelta(
+                        seconds=int(seconds_per_img * (total - num_warmup) - duration)
+                    )
+                    logger.info(
+                        "Embedding inference done {}/{}. {:.4f} s / img. ETA={}".format(
+                            idx + 1, total, seconds_per_img, str(eta)
+                        )
+                    )
+
+    # Measure the time only for this worker (before the synchronization barrier)
+    total_time = int(time.time() - start_time)
+    total_time_str = str(datetime.timedelta(seconds=total_time))
+    # NOTE this format is parsed by grep
+    logger.info(
+        "Total embedding inference time: {} ({:.6f} s / img per device, on {} devices)".format(
+            total_time_str, total_time / (total - num_warmup), num_devices
+        )
+    )
+    total_compute_time_str = str(datetime.timedelta(seconds=int(total_compute_time)))
+    logger.info(
+        "Total embedding inference pure compute time: {} ({:.6f} s / img per device, on {} devices)".format(
+            total_compute_time_str, total_compute_time / (total - num_warmup), num_devices
+        )
+    )
+    # An evaluator may return None when not in main process.
+    # Replace it by an empty dict instead to make it easier for downstream code to handle
+    # model.roi_heads.recon_net.cluster()
+
+    model.roi_heads.inference_embedding = False
+    return model
 
 
 @contextmanager

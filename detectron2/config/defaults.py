@@ -1,9 +1,5 @@
-# Copyright (c) Facebook, Inc. and its affiliates.
+# Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 from .config import CfgNode as CN
-
-# NOTE: given the new config system
-# (https://detectron2.readthedocs.io/en/latest/tutorials/lazyconfigs.html),
-# we will stop adding new functionalities to default CfgNode.
 
 # -----------------------------------------------------------------------------
 # Convention about Training / Test specific parameters
@@ -21,8 +17,6 @@ from .config import CfgNode as CN
 
 _C = CN()
 
-# The version number, to upgrade from old configs to new ones if any
-# changes happen. It's recommended to keep a VERSION in your config file.
 _C.VERSION = 2
 
 _C.MODEL = CN()
@@ -32,11 +26,11 @@ _C.MODEL.KEYPOINT_ON = False
 _C.MODEL.DEVICE = "cuda"
 _C.MODEL.META_ARCHITECTURE = "GeneralizedRCNN"
 
-# Path (a file path, or URL like detectron2://.., https://..) to a checkpoint file
+# Path (possibly with schema like catalog:// or detectron2://) to a checkpoint file
 # to be loaded to the model. You can find available models in the model zoo.
 _C.MODEL.WEIGHTS = ""
 
-# Values to be used for image normalization (BGR order, since INPUT.FORMAT defaults to BGR).
+# Values to be used for image normalization (BGR order).
 # To train on images of different number of channels, just set different mean & std.
 # Default values are the mean pixel value from ImageNet: [103.53, 116.28, 123.675]
 _C.MODEL.PIXEL_MEAN = [103.530, 116.280, 123.675]
@@ -50,8 +44,6 @@ _C.MODEL.PIXEL_STD = [1.0, 1.0, 1.0]
 # INPUT
 # -----------------------------------------------------------------------------
 _C.INPUT = CN()
-# By default, {MIN,MAX}_SIZE options are used in transforms.ResizeShortestEdge.
-# Please refer to ResizeShortestEdge for detailed definition.
 # Size of the smallest side of the image during training
 _C.INPUT.MIN_SIZE_TRAIN = (800,)
 # Sample size of smallest side by choice or random selection from range give by
@@ -63,13 +55,14 @@ _C.INPUT.MAX_SIZE_TRAIN = 1333
 _C.INPUT.MIN_SIZE_TEST = 800
 # Maximum size of the side of the image during testing
 _C.INPUT.MAX_SIZE_TEST = 1333
-# Mode for flipping images used in data augmentation during training
-# choose one of ["horizontal, "vertical", "none"]
-_C.INPUT.RANDOM_FLIP = "horizontal"
 
 # `True` if cropping is used for data augmentation during training
 _C.INPUT.CROP = CN({"ENABLED": False})
-# Cropping type. See documentation of `detectron2.data.transforms.RandomCrop` for explanation.
+# Cropping type:
+# - "relative" crop (H * CROP.SIZE[0], W * CROP.SIZE[1]) part of an input of size (H, W)
+# - "relative_range" uniformly sample relative crop size from between [CROP.SIZE[0], [CROP.SIZE[1]].
+#   and  [1, 1] and use it as in "relative" scenario.
+# - "absolute" crop part of an input with absolute size: (CROP.SIZE[0], CROP.SIZE[1]).
 _C.INPUT.CROP.TYPE = "relative_range"
 # Size of crop in range (0, 1] if CROP.TYPE is "relative" or "relative_range" and in number of
 # pixels if CROP.TYPE is "absolute"
@@ -92,7 +85,6 @@ _C.INPUT.MASK_FORMAT = "polygon"  # alternative: "bitmask"
 # -----------------------------------------------------------------------------
 _C.DATASETS = CN()
 # List of the dataset names for training. Must be registered in DatasetCatalog
-# Samples from these datasets will be merged and used as one dataset.
 _C.DATASETS.TRAIN = ()
 # List of the pre-computed proposal files for training, which must be consistent
 # with datasets listed in DATASETS.TRAIN.
@@ -121,19 +113,17 @@ _C.DATALOADER.ASPECT_RATIO_GROUPING = True
 _C.DATALOADER.SAMPLER_TRAIN = "TrainingSampler"
 # Repeat threshold for RepeatFactorTrainingSampler
 _C.DATALOADER.REPEAT_THRESHOLD = 0.0
-# Tf True, when working on datasets that have instance annotations, the
-# training dataloader will filter out images without associated annotations
+# if True, the dataloader will filter out images that have no associated
+# annotations at train time.
 _C.DATALOADER.FILTER_EMPTY_ANNOTATIONS = True
-
+_C.DATALOADER.MAPPER = ""
 # ---------------------------------------------------------------------------- #
 # Backbone options
 # ---------------------------------------------------------------------------- #
 _C.MODEL.BACKBONE = CN()
 
 _C.MODEL.BACKBONE.NAME = "build_resnet_backbone"
-# Freeze the first several stages so they are not trained.
-# There are 5 stages in ResNet. The first is a convolution, and the following
-# stages are each group of residual blocks.
+# Add StopGrad at a specified stage so the bottom layers are frozen
 _C.MODEL.BACKBONE.FREEZE_AT = 2
 
 
@@ -171,26 +161,23 @@ _C.MODEL.PROPOSAL_GENERATOR.MIN_SIZE = 0
 _C.MODEL.ANCHOR_GENERATOR = CN()
 # The generator can be any name in the ANCHOR_GENERATOR registry
 _C.MODEL.ANCHOR_GENERATOR.NAME = "DefaultAnchorGenerator"
-# Anchor sizes (i.e. sqrt of area) in absolute pixels w.r.t. the network input.
-# Format: list[list[float]]. SIZES[i] specifies the list of sizes to use for
-# IN_FEATURES[i]; len(SIZES) must be equal to len(IN_FEATURES) or 1.
-# When len(SIZES) == 1, SIZES[0] is used for all IN_FEATURES.
+# anchor sizes given in absolute pixels w.r.t. the scaled network input.
+# Format: list of lists of sizes. SIZES[i] specifies the list of sizes
+# to use for IN_FEATURES[i]; len(SIZES) == len(IN_FEATURES) must be true,
+# or len(SIZES) == 1 is true and size list SIZES[0] is used for all
+# IN_FEATURES.
 _C.MODEL.ANCHOR_GENERATOR.SIZES = [[32, 64, 128, 256, 512]]
-# Anchor aspect ratios. For each area given in `SIZES`, anchors with different aspect
-# ratios are generated by an anchor generator.
-# Format: list[list[float]]. ASPECT_RATIOS[i] specifies the list of aspect ratios (H/W)
+# Anchor aspect ratios.
+# Format is list of lists of sizes. ASPECT_RATIOS[i] specifies the list of aspect ratios
 # to use for IN_FEATURES[i]; len(ASPECT_RATIOS) == len(IN_FEATURES) must be true,
 # or len(ASPECT_RATIOS) == 1 is true and aspect ratio list ASPECT_RATIOS[0] is used
 # for all IN_FEATURES.
 _C.MODEL.ANCHOR_GENERATOR.ASPECT_RATIOS = [[0.5, 1.0, 2.0]]
 # Anchor angles.
-# list[list[float]], the angle in degrees, for each input feature map.
+# list[float], the angle in degrees, for each input feature map.
 # ANGLES[i] specifies the list of angles for IN_FEATURES[i].
 _C.MODEL.ANCHOR_GENERATOR.ANGLES = [[-90, 0, 90]]
-# Relative offset between the center of the first anchor and the top-left corner of the image
-# Value has to be in [0, 1). Recommend to use 0.5, which means half stride.
-# The value is not expected to affect model accuracy.
-_C.MODEL.ANCHOR_GENERATOR.OFFSET = 0.0
+
 
 # ---------------------------------------------------------------------------- #
 # RPN options
@@ -215,13 +202,10 @@ _C.MODEL.RPN.BOUNDARY_THRESH = -1
 # are ignored (-1)
 _C.MODEL.RPN.IOU_THRESHOLDS = [0.3, 0.7]
 _C.MODEL.RPN.IOU_LABELS = [0, -1, 1]
-# Number of regions per image used to train RPN
+# Total number of RPN examples per image
 _C.MODEL.RPN.BATCH_SIZE_PER_IMAGE = 256
 # Target fraction of foreground (positive) examples per RPN minibatch
 _C.MODEL.RPN.POSITIVE_FRACTION = 0.5
-# Options are: "smooth_l1", "giou", "diou", "ciou"
-_C.MODEL.RPN.BBOX_REG_LOSS_TYPE = "smooth_l1"
-_C.MODEL.RPN.BBOX_REG_LOSS_WEIGHT = 1.0
 # Weights on (dx, dy, dw, dh) for normalizing RPN anchor regression targets
 _C.MODEL.RPN.BBOX_REG_WEIGHTS = (1.0, 1.0, 1.0, 1.0)
 # The transition point from L1 to L2 loss. Set to 0.0 to make the loss simply L1.
@@ -236,13 +220,11 @@ _C.MODEL.RPN.PRE_NMS_TOPK_TEST = 6000
 # of proposals from all levels
 # NOTE: When FPN is used, the meaning of this config is different from Detectron1.
 # It means per-batch topk in Detectron1, but per-image topk here.
-# See the "find_top_rpn_proposals" function for details.
+# See "modeling/rpn/rpn_outputs.py" for details.
 _C.MODEL.RPN.POST_NMS_TOPK_TRAIN = 2000
 _C.MODEL.RPN.POST_NMS_TOPK_TEST = 1000
 # NMS threshold used on RPN proposals
 _C.MODEL.RPN.NMS_THRESH = 0.7
-# Set this to -1 to use the same number of output channels as input channels.
-_C.MODEL.RPN.CONV_DIMS = [-1]
 
 # ---------------------------------------------------------------------------- #
 # ROI HEADS options
@@ -260,7 +242,7 @@ _C.MODEL.ROI_HEADS.IN_FEATURES = ["res4"]
 # Overlap threshold for an RoI to be considered foreground (if >= IOU_THRESHOLD)
 _C.MODEL.ROI_HEADS.IOU_THRESHOLDS = [0.5]
 _C.MODEL.ROI_HEADS.IOU_LABELS = [0, 1]
-# RoI minibatch size *per image* (number of regions of interest [ROIs]) during training
+# RoI minibatch size *per image* (number of regions of interest [ROIs])
 # Total number of RoIs per training minibatch =
 #   ROI_HEADS.BATCH_SIZE_PER_IMAGE * SOLVER.IMS_PER_BATCH
 # E.g., a common configuration is: 512 * 16 = 8192
@@ -282,6 +264,8 @@ _C.MODEL.ROI_HEADS.NMS_THRESH_TEST = 0.5
 # If True, augment proposals with ground-truth boxes before sampling proposals to
 # train ROI heads.
 _C.MODEL.ROI_HEADS.PROPOSAL_APPEND_GT = True
+# Whether to use mask IOU as scores.
+_C.MODEL.ROI_HEADS.MASKIOU_AS_SCORES = False
 
 # ---------------------------------------------------------------------------- #
 # Box Head
@@ -290,11 +274,6 @@ _C.MODEL.ROI_BOX_HEAD = CN()
 # C4 don't use head name option
 # Options for non-C4 models: FastRCNNConvFCHead,
 _C.MODEL.ROI_BOX_HEAD.NAME = ""
-# Options are: "smooth_l1", "giou", "diou", "ciou"
-_C.MODEL.ROI_BOX_HEAD.BBOX_REG_LOSS_TYPE = "smooth_l1"
-# The final scaling coefficient on the box regression loss, used to balance the magnitude of its
-# gradients with other losses in the model. See also `MODEL.ROI_KEYPOINT_HEAD.LOSS_WEIGHT`.
-_C.MODEL.ROI_BOX_HEAD.BBOX_REG_LOSS_WEIGHT = 1.0
 # Default weights on (dx, dy, dw, dh) for normalizing bbox regression targets
 # These are empirically chosen to approximately lead to unit variance targets
 _C.MODEL.ROI_BOX_HEAD.BBOX_REG_WEIGHTS = (10.0, 10.0, 5.0, 5.0)
@@ -316,17 +295,8 @@ _C.MODEL.ROI_BOX_HEAD.CONV_DIM = 256
 _C.MODEL.ROI_BOX_HEAD.NORM = ""
 # Whether to use class agnostic for bbox regression
 _C.MODEL.ROI_BOX_HEAD.CLS_AGNOSTIC_BBOX_REG = False
-# If true, RoI heads use bounding boxes predicted by the box head rather than proposal boxes.
+# Box head classifier type
 _C.MODEL.ROI_BOX_HEAD.TRAIN_ON_PRED_BOXES = False
-
-# Federated loss can be used to improve the training of LVIS
-_C.MODEL.ROI_BOX_HEAD.USE_FED_LOSS = False
-# Sigmoid cross entrophy is used with federated loss
-_C.MODEL.ROI_BOX_HEAD.USE_SIGMOID_CE = False
-# The power value applied to image_count when calcualting frequency weight
-_C.MODEL.ROI_BOX_HEAD.FED_LOSS_FREQ_WEIGHT_POWER = 0.5
-# Number of classes to keep in total
-_C.MODEL.ROI_BOX_HEAD.FED_LOSS_NUM_CLASSES = 50
 
 # ---------------------------------------------------------------------------- #
 # Cascaded Box Head
@@ -357,6 +327,125 @@ _C.MODEL.ROI_MASK_HEAD.NORM = ""
 _C.MODEL.ROI_MASK_HEAD.CLS_AGNOSTIC_MASK = False
 # Type of pooling operation applied to the incoming feature map for each RoI
 _C.MODEL.ROI_MASK_HEAD.POOLER_TYPE = "ROIAlignV2"
+_C.MODEL.ROI_MASK_HEAD.DOWN_CONV = False
+# Amodal cycle option
+_C.MODEL.ROI_MASK_HEAD.AMODAL_CYCLE = False
+# Croos flow version
+_C.MODEL.ROI_MASK_HEAD.VERSION = 0
+_C.MODEL.ROI_MASK_HEAD.GT_AMODAL_WEIGHT = 1.0
+_C.MODEL.ROI_MASK_HEAD.GT_VISIBLE_WEIGHT = 1.0
+
+# amodal weight and visible weight
+
+# Parallel model
+# (0, 0): close, (1, 0): features*pred_mask, (0, 1):features*gt_mask, (2, 0): features*pred_logits, (1, 1): features*(pred_mask+gt_masks)
+_C.MODEL.ROI_MASK_HEAD.ATTENTION_MODE = "attention"
+
+_C.MODEL.ROI_MASK_HEAD.AMODAL_FEATURE_MATCHING = (None,)     # from the last to the first layer
+_C.MODEL.ROI_MASK_HEAD.AMODAL_FM_BETA = (0,)
+# ---------------------------------------------------------------------------- #
+# Recls of mask head
+# ---------------------------------------------------------------------------- #
+_C.MODEL.ROI_MASK_HEAD.RECLS_NET = CN()
+_C.MODEL.ROI_MASK_HEAD.RECLS_NET.NAME = ""
+
+# Options: "" (no norm), "GN", "SyncBN".
+_C.MODEL.ROI_MASK_HEAD.RECLS_NET.NORM = ""
+_C.MODEL.ROI_MASK_HEAD.RECLS_NET.NUM_CONV = 0
+_C.MODEL.ROI_MASK_HEAD.RECLS_NET.NUM_FC = 2
+_C.MODEL.ROI_MASK_HEAD.RECLS_NET.FC_DIM = 1024
+_C.MODEL.ROI_MASK_HEAD.RECLS_NET.CONV_DIM = 256
+
+_C.MODEL.ROI_MASK_HEAD.RECLS_NET.MASK_THS = 0.8
+_C.MODEL.ROI_MASK_HEAD.RECLS_NET.BOX_THS = 0.8
+_C.MODEL.ROI_MASK_HEAD.RECLS_NET.LAMBDA = 0.25
+_C.MODEL.ROI_MASK_HEAD.RECLS_NET.GT_WEIGHT = 0.1
+
+# Whether to use class agnostic for bbox regression
+_C.MODEL.ROI_MASK_HEAD.RECLS_NET.MODE = "filter"
+_C.MODEL.ROI_MASK_HEAD.RECLS_NET.PROG_CONSTRAINT = False
+_C.MODEL.ROI_MASK_HEAD.RECLS_NET.RESCORING = True
+
+
+# ---------------------------------------------------------------------------- #
+# Reconstruction Net
+# ---------------------------------------------------------------------------- #
+_C.MODEL.ROI_MASK_HEAD.RECON_NET = CN()
+_C.MODEL.ROI_MASK_HEAD.RECON_NET.NAME = ""
+# The num of conv layer
+_C.MODEL.ROI_MASK_HEAD.RECON_NET.NUM_CONV = 3
+# Channels of each layer
+_C.MODEL.ROI_MASK_HEAD.RECON_NET.CONV_DIM = 8
+# Options: "" (no norm), "GN", "SyncBN".
+_C.MODEL.ROI_MASK_HEAD.RECON_NET.NORM = "BN"
+_C.MODEL.ROI_MASK_HEAD.RECON_NET.MASK_THS = 0.8
+_C.MODEL.ROI_MASK_HEAD.RECON_NET.BOX_THS = 0.8
+_C.MODEL.ROI_MASK_HEAD.RECON_NET.ALPHA = 2.0
+_C.MODEL.ROI_MASK_HEAD.RECON_NET.MEMO_AUG = True
+_C.MODEL.ROI_MASK_HEAD.RECON_NET.KMEANS = 1024
+_C.MODEL.ROI_MASK_HEAD.RECON_NET.LOAD_CODEBOOK = False
+_C.MODEL.ROI_MASK_HEAD.RECON_NET.RESCORING = True
+_C.MODEL.ROI_MASK_HEAD.RECON_NET.MEMORY_REFINE = False
+_C.MODEL.ROI_MASK_HEAD.RECON_NET.MEMORY_REFINE_K = 10
+
+# KL divergency loss lambda
+_C.MODEL.ROI_MASK_HEAD.RECON_NET.LAMBDA_KL = 1
+
+
+# ---------------------------------------------------------------------------- #
+# VISIBLE Mask Head
+# ---------------------------------------------------------------------------- #
+_C.MODEL.ROI_VISIBLE_MASK_HEAD = CN()
+_C.MODEL.ROI_VISIBLE_MASK_HEAD.NAME = "VisibleMaskRCNNConvUpsampleHead"
+_C.MODEL.ROI_VISIBLE_MASK_HEAD.POOLER_RESOLUTION = 14
+_C.MODEL.ROI_VISIBLE_MASK_HEAD.POOLER_SAMPLING_RATIO = 0
+_C.MODEL.ROI_VISIBLE_MASK_HEAD.NUM_CONV = 0  # The number of convs in the mask head
+_C.MODEL.ROI_VISIBLE_MASK_HEAD.CONV_DIM = 256
+# Normalization method for the convolution layers.
+# Options: "" (no norm), "GN", "SyncBN".
+_C.MODEL.ROI_VISIBLE_MASK_HEAD.NORM = ""
+# Whether to use class agnostic for mask prediction
+_C.MODEL.ROI_VISIBLE_MASK_HEAD.CLS_AGNOSTIC_MASK = False
+# Type of pooling operation applied to the incoming feature map for each RoI
+_C.MODEL.ROI_VISIBLE_MASK_HEAD.POOLER_TYPE = "ROIAlignV2"
+
+
+# ---------------------------------------------------------------------------- #
+# INVISIBLE Mask Head
+# ---------------------------------------------------------------------------- #
+_C.MODEL.ROI_INVISIBLE_MASK_HEAD = CN()
+_C.MODEL.ROI_INVISIBLE_MASK_HEAD.NAME = "InvisibleMaskRCNNHead"
+_C.MODEL.ROI_INVISIBLE_MASK_HEAD.POOLER_RESOLUTION = 14
+_C.MODEL.ROI_INVISIBLE_MASK_HEAD.POOLER_SAMPLING_RATIO = 0
+# Normalization method for the convolution layers.
+# Options: "" (no norm), "GN", "SyncBN".
+_C.MODEL.ROI_INVISIBLE_MASK_HEAD.NORM = ""
+# Whether to use class agnostic for mask prediction
+_C.MODEL.ROI_INVISIBLE_MASK_HEAD.CLS_AGNOSTIC_MASK = False
+# Type of pooling operation applied to the incoming feature map for each RoI
+_C.MODEL.ROI_INVISIBLE_MASK_HEAD.POOLER_TYPE = "ROIAlignV2"
+
+
+# ---------------------------------------------------------------------------- #
+# AMODAL Mask Head
+# ---------------------------------------------------------------------------- #
+_C.MODEL.ROI_AMODAL_MASK_HEAD = CN()
+_C.MODEL.ROI_AMODAL_MASK_HEAD.NAME = "AmodalMaskRCNNHead"
+_C.MODEL.ROI_AMODAL_MASK_HEAD.POOLER_RESOLUTION = 14
+_C.MODEL.ROI_AMODAL_MASK_HEAD.POOLER_SAMPLING_RATIO = 0
+_C.MODEL.ROI_AMODAL_MASK_HEAD.NUM_CONV = 0  # The number of convs in the mask head
+_C.MODEL.ROI_AMODAL_MASK_HEAD.CONV_DIM = 256
+# Normalization method for the convolution layers.
+# Options: "" (no norm), "GN", "SyncBN".
+_C.MODEL.ROI_AMODAL_MASK_HEAD.NORM = ""
+# Whether to use class agnostic for mask prediction
+_C.MODEL.ROI_AMODAL_MASK_HEAD.CLS_AGNOSTIC_MASK = False
+# Type of pooling operation applied to the incoming feature map for each RoI
+_C.MODEL.ROI_AMODAL_MASK_HEAD.POOLER_TYPE = "ROIAlignV2"
+
+# ---------------------------------------------------------------------------- #
+# Recls Net
+# ---------------------------------------------------------------------------- #
 
 
 # ---------------------------------------------------------------------------- #
@@ -418,7 +507,7 @@ _C.MODEL.PANOPTIC_FPN = CN()
 _C.MODEL.PANOPTIC_FPN.INSTANCE_LOSS_WEIGHT = 1.0
 
 # options when combining instance & semantic segmentation outputs
-_C.MODEL.PANOPTIC_FPN.COMBINE = CN({"ENABLED": True})  # "COMBINE.ENABLED" is deprecated & not used
+_C.MODEL.PANOPTIC_FPN.COMBINE = CN({"ENABLED": True})
 _C.MODEL.PANOPTIC_FPN.COMBINE.OVERLAP_THRESH = 0.5
 _C.MODEL.PANOPTIC_FPN.COMBINE.STUFF_AREA_LIMIT = 4096
 _C.MODEL.PANOPTIC_FPN.COMBINE.INSTANCES_CONFIDENCE_THRESH = 0.5
@@ -453,7 +542,6 @@ _C.MODEL.RETINANET.PRIOR_PROB = 0.01
 # Inference cls score threshold, only anchors with score > INFERENCE_TH are
 # considered for inference (to improve speed)
 _C.MODEL.RETINANET.SCORE_THRESH_TEST = 0.05
-# Select topk candidates before NMS
 _C.MODEL.RETINANET.TOPK_CANDIDATES_TEST = 1000
 _C.MODEL.RETINANET.NMS_THRESH_TEST = 0.5
 
@@ -464,12 +552,6 @@ _C.MODEL.RETINANET.BBOX_REG_WEIGHTS = (1.0, 1.0, 1.0, 1.0)
 _C.MODEL.RETINANET.FOCAL_LOSS_GAMMA = 2.0
 _C.MODEL.RETINANET.FOCAL_LOSS_ALPHA = 0.25
 _C.MODEL.RETINANET.SMOOTH_L1_LOSS_BETA = 0.1
-# Options are: "smooth_l1", "giou", "diou", "ciou"
-_C.MODEL.RETINANET.BBOX_REG_LOSS_TYPE = "smooth_l1"
-
-# One of BN, SyncBN, FrozenBN, GN
-# Only supports GN until unshared norm is implemented
-_C.MODEL.RETINANET.NORM = ""
 
 
 # ---------------------------------------------------------------------------- #
@@ -500,7 +582,6 @@ _C.MODEL.RESNETS.STRIDE_IN_1X1 = True
 _C.MODEL.RESNETS.RES5_DILATION = 1
 
 # Output width of res2. Scaling this parameters will scale the width of all 1x1 convs in ResNet
-# For R18 and R34, this needs to be set to 64
 _C.MODEL.RESNETS.RES2_OUT_CHANNELS = 256
 _C.MODEL.RESNETS.STEM_OUT_CHANNELS = 64
 
@@ -519,19 +600,14 @@ _C.MODEL.RESNETS.DEFORM_NUM_GROUPS = 1
 # ---------------------------------------------------------------------------- #
 _C.SOLVER = CN()
 
-# Options: WarmupMultiStepLR, WarmupCosineLR.
-# See detectron2/solver/build.py for definition.
+# See detectron2/solver/build.py for LR scheduler options
 _C.SOLVER.LR_SCHEDULER_NAME = "WarmupMultiStepLR"
 
 _C.SOLVER.MAX_ITER = 40000
 
 _C.SOLVER.BASE_LR = 0.001
-# The end lr, only used by WarmupCosineLR
-_C.SOLVER.BASE_LR_END = 0.0
 
 _C.SOLVER.MOMENTUM = 0.9
-
-_C.SOLVER.NESTEROV = False
 
 _C.SOLVER.WEIGHT_DECAY = 0.0001
 # The weight decay that's applied to parameters of normalization layers
@@ -541,57 +617,26 @@ _C.SOLVER.WEIGHT_DECAY_NORM = 0.0
 _C.SOLVER.GAMMA = 0.1
 # The iteration number to decrease learning rate by GAMMA.
 _C.SOLVER.STEPS = (30000,)
-# Number of decays in WarmupStepWithFixedGammaLR schedule
-_C.SOLVER.NUM_DECAYS = 3
 
 _C.SOLVER.WARMUP_FACTOR = 1.0 / 1000
 _C.SOLVER.WARMUP_ITERS = 1000
 _C.SOLVER.WARMUP_METHOD = "linear"
-# Whether to rescale the interval for the learning schedule after warmup
-_C.SOLVER.RESCALE_INTERVAL = False
 
-# Save a checkpoint after every this number of iterations
-_C.SOLVER.CHECKPOINT_PERIOD = 5000
+_C.SOLVER.CHECKPOINT_PERIOD = 30000
 
-# Number of images per batch across all machines. This is also the number
-# of training images per step (i.e. per iteration). If we use 16 GPUs
-# and IMS_PER_BATCH = 32, each GPU will see 2 images per batch.
-# May be adjusted automatically if REFERENCE_WORLD_SIZE is set.
+# Number of images per batch across all machines.
+# If we have 16 GPUs and IMS_PER_BATCH = 32,
+# each GPU will see 2 images per batch.
 _C.SOLVER.IMS_PER_BATCH = 16
-
-# The reference number of workers (GPUs) this config is meant to train with.
-# It takes no effect when set to 0.
-# With a non-zero value, it will be used by DefaultTrainer to compute a desired
-# per-worker batch size, and then scale the other related configs (total batch size,
-# learning rate, etc) to match the per-worker batch size.
-# See documentation of `DefaultTrainer.auto_scale_workers` for details:
-_C.SOLVER.REFERENCE_WORLD_SIZE = 0
 
 # Detectron v1 (and previous detection code) used a 2x higher LR and 0 WD for
 # biases. This is not useful (at least for recent models). You should avoid
 # changing these and they exist only to reproduce Detectron v1 training if
 # desired.
 _C.SOLVER.BIAS_LR_FACTOR = 1.0
-_C.SOLVER.WEIGHT_DECAY_BIAS = None  # None means following WEIGHT_DECAY
+_C.SOLVER.WEIGHT_DECAY_BIAS = _C.SOLVER.WEIGHT_DECAY
 
-# Gradient clipping
-_C.SOLVER.CLIP_GRADIENTS = CN({"ENABLED": False})
-# Type of gradient clipping, currently 2 values are supported:
-# - "value": the absolute values of elements of each gradients are clipped
-# - "norm": the norm of the gradient for each parameter is clipped thus
-#   affecting all elements in the parameter
-_C.SOLVER.CLIP_GRADIENTS.CLIP_TYPE = "value"
-# Maximum absolute value used for clipping gradients
-_C.SOLVER.CLIP_GRADIENTS.CLIP_VALUE = 1.0
-# Floating point number p for L-p norm to be used with the "norm"
-# gradient clipping type; for L-inf, please specify .inf
-_C.SOLVER.CLIP_GRADIENTS.NORM_TYPE = 2.0
-
-# Enable automatic mixed precision for training
-# Note that this does not change model's inference behavior.
-# To use AMP in inference, run inference under autocast()
-_C.SOLVER.AMP = CN({"ENABLED": False})
-
+_C.SOLVER.OPT_TYPE = "SGD"
 # ---------------------------------------------------------------------------- #
 # Specific test options
 # ---------------------------------------------------------------------------- #
@@ -603,9 +648,9 @@ _C.TEST.EXPECTED_RESULTS = []
 # The period (in terms of steps) to evaluate the model during training.
 # Set to 0 to disable.
 _C.TEST.EVAL_PERIOD = 0
-# The sigmas used to calculate keypoint OKS. See http://cocodataset.org/#keypoints-eval
-# When empty, it will use the defaults in COCO.
-# Otherwise it should be a list[float] with the same length as ROI_KEYPOINT_HEAD.NUM_KEYPOINTS.
+# The sigmas used to calculate keypoint OKS.
+# When empty it will use the defaults in COCO.
+# Otherwise it should have the same length as ROI_KEYPOINT_HEAD.NUM_KEYPOINTS.
 _C.TEST.KEYPOINT_OKS_SIGMAS = []
 # Maximum number of detections to return per image during inference (100 is
 # based on the limit established for the COCO dataset).
@@ -619,15 +664,18 @@ _C.TEST.AUG.FLIP = True
 _C.TEST.PRECISE_BN = CN({"ENABLED": False})
 _C.TEST.PRECISE_BN.NUM_ITER = 200
 
+_C.TEST.EVAL_AMODAL_TYPE = "NORMAL"
 # ---------------------------------------------------------------------------- #
 # Misc options
 # ---------------------------------------------------------------------------- #
 # Directory where output files are written
-_C.OUTPUT_DIR = "./output"
+# _C.OUTPUT_DIR = '/p300/workspace/detectron2/'
+_C.OUTPUT_DIR = '/workspace/vrsp_net_output/' # modified by nshimada on 2022/08/18
+_C.OUTPUT = CN()
+_C.OUTPUT.TRAIN_VERSION = 'main'
 # Set seed to negative to fully randomize everything.
-# Set seed to positive to use a fixed seed. Note that a fixed seed increases
-# reproducibility but does not guarantee fully deterministic behavior.
-# Disabling all parallelism further increases reproducibility.
+# Set seed to positive to use a fixed seed. Note that a fixed seed does not
+# guarantee fully deterministic behavior.
 _C.SEED = -1
 # Benchmark different cudnn algorithms.
 # If input images have very different sizes, this option will have large overhead
@@ -636,7 +684,7 @@ _C.SEED = -1
 _C.CUDNN_BENCHMARK = False
 # The period (in terms of steps) for minibatch visualization at train time.
 # Set to 0 to disable.
-_C.VIS_PERIOD = 0
+_C.VIS_PERIOD = 10
 
 # global config is for quick hack purposes.
 # You can set them in command line or config files,
@@ -648,3 +696,4 @@ _C.VIS_PERIOD = 0
 # Do not commit any configs into it.
 _C.GLOBAL = CN()
 _C.GLOBAL.HACK = 1.0
+
